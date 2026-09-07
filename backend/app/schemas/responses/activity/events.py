@@ -32,6 +32,26 @@ class WorkoutDetailed(Workout):
     heart_rate_samples: list[TimeSeriesSample] | None = None
 
 
+class WorkoutSampleSeries(BaseModel):
+    """Per-second samples of one series, as offsets from the workout start."""
+
+    code: str
+    unit: str | None = None
+    seconds: list[int]
+    values: list[float]
+
+
+class WorkoutSamples(BaseModel):
+    """All per-second samples of a workout, bundled in a single response."""
+
+    workout_id: UUID
+    type: str
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: int | None = None
+    series: list[WorkoutSampleSeries] = []
+
+
 class Macros(BaseModel):
     protein_g: float | None = None
     carbohydrates_g: float | None = None

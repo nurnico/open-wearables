@@ -3,7 +3,9 @@ from decimal import Decimal
 from logging import Logger, getLogger
 from uuid import UUID, uuid4
 
+from sqlalchemy import bindparam
 from sqlalchemy import event as sa_event
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Query
 
 from app.database import DbSession
@@ -41,6 +43,8 @@ from app.schemas.responses.activity import (
     SleepStagesSummary,
     Workout,
     WorkoutDetailed,
+    WorkoutSampleSeries,
+    WorkoutSamples,
 )
 from app.schemas.utils import (
     PaginatedResponse,
@@ -1045,6 +1049,70 @@ class EventRecordService(
                 start_time=params.start_datetime,
                 end_time=params.end_datetime,
             ),
+        )
+
+    def get_workout_samples(
+        self,
+        db_session: DbSession,
+        user_id: UUID,
+        workout_id: UUID,
+        types: list[str] | None = None,
+        limit: int = 20_000,
+    ) -> WorkoutSamples | None:
+        """All per-second samples of one workout, bundled in a single response.
+
+        Closes the gap of the generic /timeseries endpoint (limit<=100 per
+        page): a full 1 Hz workout curve would otherwise need dozens of
+        paginated calls. Returns None if the workout is unknown or not owned
+        by the user.
+        """
+        record = self.crud.get_record_with_details(db_session, workout_id, "workout")
+        if not record:
+            return None
+        data_source = self.data_source_repo.get(db_session, record.data_source_id)
+        if not data_source or data_source.user_id != user_id:
+            return None
+
+        start = record.start_datetime
+        end = record.end_datetime or (
+            start + timedelta(seconds=record.duration_seconds or 0)
+        )
+
+        base_sql = (
+            "SELECT std.code, std.unit, dps.recorded_at, dps.value "
+            "FROM data_point_series dps "
+            "JOIN series_type_definition std ON std.id = dps.series_type_definition_id "
+            "WHERE dps.data_source_id = :ds "
+            "AND dps.recorded_at >= :s AND dps.recorded_at < :e "
+        )
+        params: dict = {"ds": record.data_source_id, "s": start, "e": end}
+        if types:
+            base_sql += "AND std.code IN :types "
+            params["types"] = list(types)
+        base_sql += "ORDER BY dps.recorded_at"
+        query = sa_text(base_sql)
+        if types:
+            query = query.bindparams(bindparam("types", expanding=True))
+        rows = db_session.execute(query, params).all()
+
+        grouped: dict[str, WorkoutSampleSeries] = {}
+        for code, unit, recorded_at, value in rows:
+            series = grouped.setdefault(
+                code, WorkoutSampleSeries(code=code, unit=unit, seconds=[], values=[])
+            )
+            if len(series.seconds) >= limit:
+                continue
+            offset = int((recorded_at - start).total_seconds())
+            series.seconds.append(offset)
+            series.values.append(round(float(value), 3))
+
+        return WorkoutSamples(
+            workout_id=record.id,
+            type=record.type or "",
+            start_time=start,
+            end_time=end,
+            duration_seconds=record.duration_seconds,
+            series=sorted(grouped.values(), key=lambda s: s.code),
         )
 
     def delete_event_record(

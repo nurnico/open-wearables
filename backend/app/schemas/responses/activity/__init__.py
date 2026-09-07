@@ -11,6 +11,8 @@ from .events import (
     SleepSession,
     Workout,
     WorkoutDetailed,
+    WorkoutSampleSeries,
+    WorkoutSamples,
 )
 from .resilience import (
     DailyHrvScore,

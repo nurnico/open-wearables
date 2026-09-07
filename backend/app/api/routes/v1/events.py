@@ -9,6 +9,7 @@ from app.schemas.responses.activity import (
     MenstrualCycleRecord,
     SleepSession,
     Workout,
+    WorkoutSamples,
 )
 from app.schemas.utils import PaginatedResponse
 from app.services import ApiKeyDep
@@ -85,6 +86,28 @@ def list_menstrual_cycles(
         limit=limit,
     )
     return event_record_service.get_menstrual_cycles(db, user_id, params)
+
+
+@router.get("/users/{user_id}/events/workouts/{workout_id}/samples")
+def get_workout_samples(
+    user_id: UUID,
+    workout_id: UUID,
+    db: DbSession,
+    _api_key: ApiKeyDep,
+    types: Annotated[list[str] | None, Query(
+        description="Series codes to include (e.g. heart_rate, speed). Defaults to all series of the workout."
+    )] = None,
+    limit: Annotated[int, Query(ge=1, le=50_000, description="Max samples per series")] = 20_000,
+) -> WorkoutSamples:
+    """All per-second samples of one workout in a single response.
+
+    Unlike the generic /timeseries endpoint (limit<=100 per page), this
+    returns a complete 1 Hz workout curve in one call.
+    """
+    result = event_record_service.get_workout_samples(db, user_id, workout_id, types, limit)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workout not found")
+    return result
 
 
 @router.delete("/users/{user_id}/events/workouts/{workout_id}", status_code=status.HTTP_204_NO_CONTENT)
