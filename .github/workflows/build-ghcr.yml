@@ -1,0 +1,42 @@
+name: build-ghcr
+
+# Fork-eigener Build nach GHCR (Runbook Phase 4.3). Der Upstream-Workflow
+# publish-images.yml pusht nach Docker Hub (themomentum/*) und läuft im
+# Fork nicht — deshalb dieser eigene, auf Push getriggerte Workflow.
+# Images: ghcr.io/nurnico/open-wearables-backend / -frontend
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/build-ghcr.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            image: ghcr.io/nurnico/open-wearables-backend
+          - name: frontend
+            context: ./frontend
+            image: ghcr.io/nurnico/open-wearables-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ matrix.image }}:latest
+            ${{ matrix.image }}:${{ github.sha }}

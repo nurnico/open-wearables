@@ -20,6 +20,7 @@ from app.middlewares import add_access_log_middleware, add_cors_middleware
 from app.services import raw_payload_storage
 from app.services.outgoing_webhooks import svix as svix_service
 from app.utils.exceptions import DatetimeParseError, handle_exception
+from app.utils.healthcheck import healthcheck_router
 
 # Configure logging to use stdout instead of stderr
 # Some platforms convert stderr logs to level.error automatically, so we must use stdout
@@ -125,4 +126,7 @@ async def http_exception_handler_with_body_log(request: Request, exc: StarletteH
     return await http_exception_handler(request, exc)
 
 
+# Health-Endpoints (/health, /health/ready) für k3s-Probes und Uptime-Kuma —
+# ohne /api/v1-Prefix und ohne Auth, Maschinen haben keinen Token.
+api.include_router(healthcheck_router, prefix="/health")
 api.include_router(head_router)
