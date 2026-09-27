@@ -335,6 +335,11 @@ class StravaWorkouts(BaseWorkoutsTemplate):
         try:
             timeseries_service.bulk_create_samples(db, samples)
             nested.commit()
+            # Release the savepoint to the real transaction as well: the
+            # sync_vendor_data task never commits its session, so without
+            # this the samples silently vanish when the session closes
+            # (observed live 27.09.2026: sync succeeded, 0 rows persisted).
+            db.commit()
             return len(samples)
         except Exception as exc:
             nested.rollback()
