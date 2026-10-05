@@ -1,21 +1,28 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 import isodate
+from sqlalchemy import func
 
+from app.config import settings
 from app.constants.workout_types.polar import get_unified_workout_type
 from app.database import DbSession
+from app.models import DataPointSeries, EventRecord
+from app.schemas.enums import SeriesType, get_series_type_id
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
     EventRecordDetailCreate,
     EventRecordMetrics,
+    TimeSeriesSampleCreate,
 )
 from app.schemas.providers.polar import ExerciseJSON as PolarExerciseJSON
 from app.services.event_record_service import event_record_service
 from app.services.providers.templates.base_workouts import BaseWorkoutsTemplate
+from app.services.timeseries_service import timeseries_service
 from app.utils.dates import offset_to_iso
+from app.utils.sentry_helpers import log_and_capture_error
 
 
 class PolarWorkouts(BaseWorkoutsTemplate):
@@ -159,14 +166,176 @@ class PolarWorkouts(BaseWorkoutsTemplate):
         workouts_data = self.get_workouts_from_api(db, user_id, **kwargs)
         workouts = [PolarExerciseJSON(**w) for w in workouts_data]
 
+        # Polar's list endpoint ignores the sync window and returns the full
+        # exercise history; the per-exercise route fetch below must not follow
+        # suit, or one sync would hammer the detail endpoint for every GPS
+        # workout ever recorded. Restrict it to the requested window (the
+        # historical sync task passes 90 days by default).
+        window_start = self._parse_window_bound(kwargs.get("start_date"))
+
         count = 0
-        for record, detail in self._build_bundles(workouts, user_id):
+        for raw_workout in workouts:
+            record, detail = self._normalize_workout(raw_workout, user_id)
             created_record = event_record_service.create(db, record)
             detail_for_record = detail.model_copy(update={"record_id": created_record.id})
             event_record_service.create_detail(db, detail_for_record)
             count += 1
+            if window_start is None or created_record.start_datetime >= window_start:
+                self._ingest_workout_route(db, user_id, raw_workout, created_record)
 
         return count
+
+    @staticmethod
+    def _parse_window_bound(value: Any) -> datetime | None:
+        """Sync window bound as naive UTC (matches how exercise records store datetimes)."""
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            try:
+                parsed = isodate.parse_datetime(str(value).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    @staticmethod
+    def _workout_has_track(db: DbSession, record: EventRecord) -> bool:
+        """True when the workout's data source already holds latitude samples.
+
+        The per-exercise route fetch below runs on every sync (Polar's list
+        endpoint returns the full exercise history each time), so this check is
+        what keeps API calls and upsert traffic bounded to the first sync.
+        """
+        latitude_id = get_series_type_id(SeriesType.latitude)
+        return (
+            db.query(func.count(DataPointSeries.id))
+            .filter(
+                DataPointSeries.data_source_id == record.data_source_id,
+                DataPointSeries.series_type_definition_id == latitude_id,
+                DataPointSeries.recorded_at >= record.start_datetime,
+                DataPointSeries.recorded_at < record.end_datetime,
+            )
+            .scalar()
+            or 0
+        ) > 0
+
+    def _ingest_workout_route(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        raw_exercise: PolarExerciseJSON,
+        record: EventRecord,
+    ) -> int:
+        """Fetch the exercise route (GPS) on demand and persist it as samples.
+
+        The list endpoint only carries aggregates; the route arrives via the
+        exercise detail endpoint with ``route=true``. Flag-gated and
+        failure-isolated like the Strava stream ingest.
+        """
+        if not settings.ingest_workout_samples:
+            return 0
+        if raw_exercise.has_route is False:
+            return 0
+        if self._workout_has_track(db, record):
+            return 0
+
+        try:
+            raw = self.get_exercise_detail(db, user_id, raw_exercise.id, samples=False, zones=False, route=True)
+            exercise = PolarExerciseJSON(**raw)
+        except Exception as exc:
+            log_and_capture_error(
+                exc,
+                self.logger,
+                "Failed to fetch Polar exercise route, skipping samples",
+                extra={"exercise_id": raw_exercise.id},
+            )
+            return 0
+
+        samples = self._build_route_samples(exercise, user_id, record)
+        if not samples:
+            return 0
+        # Same savepoint+commit dance as Strava's stream ingest: the sync task
+        # never commits its session, so without the explicit commit the route
+        # rows silently vanish when the session closes.
+        nested = db.begin_nested()
+        try:
+            timeseries_service.bulk_create_samples(db, samples)
+            nested.commit()
+            db.commit()
+            return len(samples)
+        except Exception as exc:
+            nested.rollback()
+            log_and_capture_error(
+                exc,
+                self.logger,
+                "Polar route sample ingestion failed; continuing",
+                extra={"exercise_id": raw_exercise.id, "sample_count": len(samples)},
+            )
+            return 0
+
+    def _build_route_samples(
+        self,
+        exercise: PolarExerciseJSON,
+        user_id: UUID,
+        record: EventRecord,
+    ) -> list[TimeSeriesSampleCreate]:
+        """Turn Polar route points into latitude/longitude sample rows.
+
+        ``device_model`` must match the workout record's so both resolve to the
+        same data source -- the samples endpoint joins on data_source_id, a
+        different source would hide the track from /workouts/{id}/samples.
+        """
+        route = exercise.route or []
+        points = [p for p in route if p.latitude is not None and p.longitude is not None]
+        if not points:
+            return []
+
+        # Polar encodes route point times as ISO 8601 durations relative to the
+        # start. Tolerate numbers (plain seconds) and, if no point carries a
+        # parseable time at all, spread the points evenly across the workout
+        # duration -- the map only needs the geometry, and dropping the whole
+        # track over missing offsets would be worse.
+        def _offset_seconds(time_value: Any) -> float | None:
+            if time_value is None:
+                return None
+            if isinstance(time_value, (int, float)):
+                return float(time_value)
+            try:
+                return isodate.parse_duration(str(time_value)).total_seconds()
+            except Exception:
+                return None
+
+        offsets = [_offset_seconds(p.time) for p in points]
+        if all(offset is None for offset in offsets):
+            span = max((record.end_datetime - record.start_datetime).total_seconds(), 1.0)
+            offsets = [span * i / max(len(points) - 1, 1) for i in range(len(points))]
+
+        zone_offset = record.zone_offset
+        samples: list[TimeSeriesSampleCreate] = []
+        for point, offset in zip(points, offsets):
+            if offset is None:
+                continue
+            recorded_at = record.start_datetime + timedelta(seconds=offset)
+            for value, series_type in (
+                (point.latitude, SeriesType.latitude),
+                (point.longitude, SeriesType.longitude),
+            ):
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        source="polar",
+                        device_model=exercise.device,
+                        recorded_at=recorded_at,
+                        zone_offset=zone_offset,
+                        value=Decimal(str(value)),
+                        series_type=series_type,
+                    )
+                )
+        return samples
 
     def fetch_and_save_exercise(self, db: DbSession, user_id: UUID, path: str) -> int:
         """Fetch a single exercise by URL path and save it. Used by webhook handler."""
@@ -177,6 +346,7 @@ class PolarWorkouts(BaseWorkoutsTemplate):
         for record, detail in self._build_bundles([PolarExerciseJSON(**raw)], user_id):
             created = event_record_service.create(db, record)
             event_record_service.create_detail(db, detail.model_copy(update={"record_id": created.id}))
+            self._ingest_workout_route(db, user_id, PolarExerciseJSON(**raw), created)
             count += 1
         return count
 

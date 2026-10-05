@@ -43,8 +43,8 @@ from app.schemas.responses.activity import (
     SleepStagesSummary,
     Workout,
     WorkoutDetailed,
-    WorkoutSampleSeries,
     WorkoutSamples,
+    WorkoutSampleSeries,
 )
 from app.schemas.utils import (
     PaginatedResponse,
@@ -1104,7 +1104,9 @@ class EventRecordService(
                 continue
             offset = int((recorded_at - start).total_seconds())
             series.seconds.append(offset)
-            series.values.append(round(float(value), 3))
+            # 6 decimals: integer-ish series (HR, watts) are unaffected, GPS
+            # coordinates (latitude/longitude) would be worthless at 3 (~111 m).
+            series.values.append(round(float(value), 6))
 
         return WorkoutSamples(
             workout_id=record.id,

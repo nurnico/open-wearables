@@ -1,5 +1,5 @@
-from uuid import UUID
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped
@@ -8,11 +8,12 @@ from app.database import BaseDbModel
 from app.mappings import (
     FKDataSource,
     FKSeriesTypeDefinition,
-    PrimaryKey,
     Indexed,
-    numeric_10_3,
+    PrimaryKey,
+    numeric_12_6,
 )
 from app.schemas.enums import AggregationMethod
+
 
 class DataPointSeriesArchive(BaseDbModel):
     """Daily-aggregated archive of time-series data points.
@@ -38,5 +39,5 @@ class DataPointSeriesArchive(BaseDbModel):
     series_type_definition_id: Mapped[FKSeriesTypeDefinition]
     bucket_start_at: Mapped[Indexed[datetime]]
     aggregation_type: Mapped[AggregationMethod]
-    value: Mapped[numeric_10_3]
+    value: Mapped[numeric_12_6]
     sample_count: Mapped[int]

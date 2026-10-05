@@ -35,6 +35,7 @@ numeric_5_2 = Annotated[Decimal, mapped_column(Numeric(5, 2))]
 numeric_6_3 = Annotated[Decimal, mapped_column(Numeric(6, 3))]
 numeric_10_3 = Annotated[Decimal, mapped_column(Numeric(10, 3))]
 numeric_10_2 = Annotated[Decimal, mapped_column(Numeric(10, 2))]
+numeric_12_6 = Annotated[Decimal, mapped_column(Numeric(12, 6))]
 numeric_15_5 = Annotated[Decimal, mapped_column(Numeric(15, 5))]
 
 # Custom foreign keys

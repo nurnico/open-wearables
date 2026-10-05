@@ -10,12 +10,21 @@ STREAM_KEY_SERIES_TYPE: dict[str, SeriesType] = {
     "watts": SeriesType.power,
 }
 
+# GPS track: Strava's latlng stream carries [lat, lng] pairs, which map to TWO
+# series types instead of one -- handled specially in workouts.py, which splits
+# each pair into latitude + longitude rows.
+STREAM_KEY_LATLNG = "latlng"
+
 # Value for the Strava streams `keys` query param: time axis first, then every metric.
-STREAM_KEYS_PARAM: str = ",".join(["time", *STREAM_KEY_SERIES_TYPE])
+STREAM_KEYS_PARAM: str = ",".join(["time", *STREAM_KEY_SERIES_TYPE, STREAM_KEY_LATLNG])
 
 # Workout-context only, gated by settings.ingest_workout_samples.
 TIMESERIES: frozenset[SeriesType] = frozenset(
-    STREAM_KEY_SERIES_TYPE.values(),  # /api/v3/activities/{id}/streams
+    [
+        *STREAM_KEY_SERIES_TYPE.values(),  # /api/v3/activities/{id}/streams
+        SeriesType.latitude,
+        SeriesType.longitude,
+    ]
 )
 
 # EventRecordDetail fields populated by workouts.py from workout records

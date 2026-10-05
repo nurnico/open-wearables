@@ -272,7 +272,10 @@ class StravaWorkouts(BaseWorkoutsTemplate):
             if stream and stream.data:
                 mapped.append((stream.data, series_type))
 
-        if not mapped:
+        # GPS track: each latlng entry is a [lat, lng] pair -> two scalar rows.
+        latlng_data: list[Any] | None = streams.latlng.data if streams.latlng else None
+
+        if not mapped and not latlng_data:
             return []
 
         result: list[TimeSeriesSampleCreate] = []
@@ -298,6 +301,30 @@ class StravaWorkouts(BaseWorkoutsTemplate):
                         series_type=series_type,
                     )
                 )
+            if latlng_data and i < len(latlng_data):
+                pair = latlng_data[i]
+                if (
+                    isinstance(pair, (list, tuple))
+                    and len(pair) == 2
+                    and pair[0] is not None
+                    and pair[1] is not None
+                ):
+                    for value, series_type in (
+                        (pair[0], SeriesType.latitude),
+                        (pair[1], SeriesType.longitude),
+                    ):
+                        result.append(
+                            TimeSeriesSampleCreate(
+                                id=uuid4(),
+                                user_id=user_id,
+                                source="strava",
+                                device_model=device_model,
+                                recorded_at=recorded_at,
+                                zone_offset=zone_offset,
+                                value=Decimal(str(value)),
+                                series_type=series_type,
+                            )
+                        )
         return result
 
     def _ingest_workout_streams(

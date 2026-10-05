@@ -32,3 +32,5 @@ class StravaStreamSet(BaseModel):
     velocity_smooth: StravaStream | None = None
     cadence: StravaStream | None = None
     watts: StravaStream | None = None
+    # GPS track: data is a list of [lat, lng] pairs (not scalar values).
+    latlng: StravaStream | None = None
