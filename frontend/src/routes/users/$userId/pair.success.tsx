@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Check, ArrowRight, ExternalLink } from 'lucide-react';
 import { useOAuthProviders } from '@/hooks/api/use-oauth-providers';
@@ -12,12 +12,38 @@ export const Route = createFileRoute('/users/$userId/pair/success')({
   validateSearch: (search: Record<string, unknown>) => ({
     provider: (search.provider as string) || undefined,
     redirect_url: (search.redirect_url as string) || undefined,
+    claim: (search.claim as string) || undefined,
   }),
 });
 
 function PairSuccessPage() {
   const { userId } = Route.useParams();
-  const { provider: providerId, redirect_url: redirectUrl } = Route.useSearch();
+  const { provider: providerId, redirect_url: redirectUrl, claim } = Route.useSearch();
+  const [claimError, setClaimError] = useState(false);
+
+  useEffect(() => {
+    // Consent binding: the backend parks the connection behind the one-time
+    // claim token delivered via this redirect; it is only persisted for the
+    // user whose browser completed the provider consent.
+    if (!claim) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`${API_CONFIG.baseUrl}/api/v1/oauth/claim`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claim_token: claim, user_id: userId }),
+        });
+        if (!response.ok) throw new Error('claim failed');
+        if (!cancelled) setClaimError(false);
+      } catch {
+        if (!cancelled) setClaimError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [claim, userId]);
 
   useEffect(() => {
     queryClient.invalidateQueries({
@@ -59,12 +85,14 @@ function PairSuccessPage() {
           className="text-center space-y-3 mb-10"
         >
           <h1 className="text-3xl font-medium text-white tracking-tight">
-            Successfully connected
+            {claimError ? 'Connection not completed' : 'Successfully connected'}
           </h1>
           <p className="text-lg text-zinc-400 leading-relaxed">
-            {provider
-              ? `Your ${provider.name} device is now linked and syncing data.`
-              : 'Your device is now linked and syncing data.'}
+            {claimError
+              ? 'The connection could not be assigned (link expired or already used). Please pair the device again.'
+              : provider
+                ? `Your ${provider.name} device is now linked and syncing data.`
+                : 'Your device is now linked and syncing data.'}
           </p>
         </motion.div>
 

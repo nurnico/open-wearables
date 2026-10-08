@@ -67,6 +67,10 @@ class BaseOAuthTemplate(ABC):
     use_pkce: bool = False
     auth_method: AuthenticationMethod = AuthenticationMethod.BASIC_AUTH
 
+    claim_ttl = 600  # 10 minutes to complete the flow after provider consent
+
+    CLAIM_REDIS_PREFIX = "oauth_claim:"
+
     def get_authorization_url(self, user_id: UUID, redirect_uri: str | None = None) -> tuple[str, str]:
         """Generates the provider's authorization URL.
 
@@ -100,8 +104,19 @@ class BaseOAuthTemplate(ABC):
 
         return auth_url, state
 
-    def handle_callback(self, db: DbSession, code: str, state: str) -> OAuthState:
-        """Handles the OAuth callback, exchanges code, and saves the connection."""
+    def prepare_pending_connection(self, db: DbSession, code: str, state: str) -> tuple[str, str, str | None]:
+        """Handles the OAuth callback WITHOUT saving the connection.
+
+        Consent binding: whoever completes the provider consent in the browser
+        is not necessarily the party that requested the authorize URL, so the
+        tokens are parked behind a one-time claim token. The connection is
+        only persisted by claim_connection() for the user that presents the
+        claim token (delivered exclusively via the redirect to the trusted
+        frontend).
+
+        Returns:
+            tuple[str, str, str | None]: (claim_token, provider, redirect_uri)
+        """
         oauth_state, code_verifier = self._validate_state(state)
 
         if oauth_state.provider != self.provider_name:
@@ -110,28 +125,98 @@ class BaseOAuthTemplate(ABC):
                 "error",
                 "Provider mismatch in OAuth state",
                 provider=self.provider_name,
-                task="handle_callback",
+                task="prepare_pending_connection",
                 user_id=str(oauth_state.user_id),
                 state_provider=oauth_state.provider,
             )
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Provider mismatch in state")
 
         token_response = self._exchange_token(code, code_verifier)
-
         user_info = self._get_provider_user_info(token_response, str(oauth_state.user_id))
 
-        self._save_connection(db, oauth_state.user_id, token_response, user_info, oauth_state)
+        claim_token = secrets.token_urlsafe(32)
+        pending = {
+            "provider": self.provider_name,
+            "requested_by_user_id": str(oauth_state.user_id),
+            "redirect_uri": oauth_state.redirect_uri,
+            "token_response": token_response.model_dump(mode="json"),
+            "user_info": user_info,
+        }
+        self.redis_client.setex(
+            f"{self.CLAIM_REDIS_PREFIX}{claim_token}",
+            self.claim_ttl,
+            json.dumps(pending),
+        )
 
         log_structured(
             logger,
             "info",
-            "OAuth callback handled successfully",
+            "OAuth connection pending claim",
             provider=self.provider_name,
-            task="handle_callback",
+            task="prepare_pending_connection",
             user_id=str(oauth_state.user_id),
         )
 
-        return oauth_state
+        return claim_token, self.provider_name, oauth_state.redirect_uri
+
+    @classmethod
+    def peek_claim_provider(cls, claim_token: str) -> str | None:
+        """Returns the provider of a pending claim without consuming it."""
+        raw = get_redis_client().get(f"{cls.CLAIM_REDIS_PREFIX}{claim_token}")
+        if not raw:
+            return None
+        raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        return str(json.loads(raw_str).get("provider") or "")
+
+    def claim_connection(self, db: DbSession, user_id: UUID, claim_token: str) -> str:
+        """Persists a pending OAuth connection for the claiming user.
+
+        The claim token is single-use; the connection lands on user_id, the
+        user whose client presents the token — not the party that originally
+        minted the authorize URL.
+
+        Returns:
+            str: provider name of the claimed connection.
+        """
+        redis_key = f"{self.CLAIM_REDIS_PREFIX}{claim_token}"
+        raw = self.redis_client.get(redis_key)
+        if not raw:
+            raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Invalid or expired claim token")
+
+        # Consume atomically: only one of racing claimers wins
+        if not self.redis_client.getdel(redis_key):
+            raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Invalid or expired claim token")
+
+        raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        pending = json.loads(raw_str)
+
+        if pending.get("provider") != self.provider_name:
+            log_structured(
+                logger,
+                "error",
+                "Provider mismatch in OAuth claim",
+                provider=self.provider_name,
+                task="claim_connection",
+                user_id=str(user_id),
+                claim_provider=pending.get("provider"),
+            )
+            raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Provider mismatch in claim")
+
+        token_response = OAuthTokenResponse.model_validate(pending["token_response"])
+        oauth_state = OAuthState(user_id=user_id, provider=self.provider_name)
+        self._save_connection(db, user_id, token_response, pending.get("user_info") or {}, oauth_state)
+
+        log_structured(
+            logger,
+            "info",
+            "OAuth connection claimed",
+            provider=self.provider_name,
+            task="claim_connection",
+            user_id=str(user_id),
+            requested_by=str(pending.get("requested_by_user_id")),
+        )
+
+        return self.provider_name
 
     def refresh_access_token(self, db: DbSession, user_id: UUID, refresh_token: str) -> OAuthTokenResponse:
         """Refreshes the access token using the refresh token."""

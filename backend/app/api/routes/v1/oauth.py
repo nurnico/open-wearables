@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from app.config import settings
 from app.database import DbSession
@@ -18,6 +19,7 @@ from app.services import DeveloperDep, user_connection_service
 from app.services.provider_settings_service import ProviderSettingsService
 from app.services.providers.base_strategy import BaseProviderStrategy
 from app.services.providers.factory import ProviderFactory
+from app.services.providers.templates.base_oauth import BaseOAuthTemplate
 
 router = APIRouter()
 factory = ProviderFactory()
@@ -72,7 +74,11 @@ def oauth_callback(
     """
     OAuth callback endpoint.
 
-    Provider redirects here after user authorizes. Exchanges code for tokens.
+    Provider redirects here after user authorizes. Exchanges code for tokens
+    and parks the connection behind a one-time claim token; the connection is
+    only persisted when the user's own client claims it (POST /oauth/claim).
+    The claim token is appended to the redirect so it reaches only the
+    browser that completed the consent.
     """
     if error:
         return RedirectResponse(
@@ -89,11 +95,51 @@ def oauth_callback(
     strategy = get_oauth_strategy(provider)
 
     assert strategy.oauth
-    oauth_state = strategy.oauth.handle_callback(db, code, state)
+    claim_token, _provider, redirect_uri = strategy.oauth.prepare_pending_connection(db, code, state)
+
+    # Only redirect to the URI the authorize call pinned (frontend/app),
+    # appending the one-time claim token for the completing browser.
+    if redirect_uri:
+        separator = "&" if "?" in redirect_uri else "?"
+        return RedirectResponse(url=f"{redirect_uri}{separator}claim={claim_token}", status_code=303)
+
+    return RedirectResponse(
+        url=f"/api/v1/oauth/success?provider={provider.value}&claim={claim_token}",
+        status_code=303,
+    )
+
+
+class OAuthClaimRequest(BaseModel):
+    claim_token: str
+    user_id: UUID
+
+
+@router.post("/claim", tags=["System: OAuth"])
+def oauth_claim(
+    db: DbSession,
+    body: OAuthClaimRequest,
+):
+    """
+    Claim a pending OAuth connection for a user.
+
+    Called by trusted first-party clients (the bittersprint backend with the
+    user's JWT, the portal success page) with the one-time claim token that
+    was delivered exclusively via the post-consent redirect. The connection
+    is persisted for the claiming user — not for the party that minted the
+    authorize URL (consent-binding fix).
+    """
+    provider_name = BaseOAuthTemplate.peek_claim_provider(body.claim_token)
+    if not provider_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired claim token")
+
+    strategy = get_oauth_strategy(ProviderName(provider_name))
+
+    assert strategy.oauth
+    claimed_provider = strategy.oauth.claim_connection(db, body.user_id, body.claim_token)
 
     # Stamp last_synced_at=now so the first periodic sync uses the connection
     # timestamp as its live-sync cursor and won't attempt to pull all history.
-    user_connection_service.stamp_last_synced_at(db, oauth_state.user_id, provider.value)
+    user_connection_service.stamp_last_synced_at(db, body.user_id, claimed_provider)
 
     # Grace-period flag: automatically kick off a historical sync so integrators
     # who haven't yet adopted the explicit /sync/historical call still get backfill.
@@ -104,29 +150,21 @@ def oauth_callback(
             # this code is going to be removed later, so leave inner imports heres
             from app.integrations.celery.tasks import start_garmin_full_backfill
 
-            start_garmin_full_backfill.delay(str(oauth_state.user_id))
+            start_garmin_full_backfill.delay(str(body.user_id))
         elif caps.rest_pull:
             from app.integrations.celery.tasks import sync_vendor_data
 
             now = datetime.now(timezone.utc)
             start_date = (now - timedelta(days=90)).isoformat()
             sync_vendor_data.delay(
-                user_id=str(oauth_state.user_id),
+                user_id=str(body.user_id),
                 start_date=start_date,
                 end_date=now.isoformat(),
-                providers=[provider.value],
+                providers=[claimed_provider],
                 is_historical=True,
             )
 
-    # If a specific redirect_uri was requested (e.g. by frontend), redirect there
-    if oauth_state.redirect_uri:
-        return RedirectResponse(url=oauth_state.redirect_uri, status_code=303)
-
-    # Otherwise, redirect to internal success page
-    return RedirectResponse(
-        url=f"/api/v1/oauth/success?provider={provider.value}&user_id={oauth_state.user_id}",
-        status_code=303,
-    )
+    return {"success": True, "provider": claimed_provider, "user_id": str(body.user_id)}
 
 
 @router.get("/success", tags=["System: OAuth"])
