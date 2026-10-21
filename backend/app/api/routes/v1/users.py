@@ -65,7 +65,11 @@ def create_user(payload: UserCreate, db: DbSession, _api_key: ApiKeyDep):
 
 
 @router.delete("/users/{user_id}", response_model=UserRead)
-def delete_user(user_id: UUID, db: DbSession, _developer: DeveloperDep):
+# 21.10.: ApiKeyDep statt DeveloperDep — der Plattform-Loeschpfad (DSGVO
+# Art. 17: Account-Loeschung + 60-Tage-Sweep) raeumt OW mit ab und hat nur
+# den API-Key. Der Key darf ohnehin alle User-Daten lesen und User anlegen;
+# Delete ist konsistent maechtig und bleibt exklusiv beim Plattform-Backend.
+def delete_user(user_id: UUID, db: DbSession, _api_key: ApiKeyDep):
     return user_service.delete(db, user_id, raise_404=True)
 
 
