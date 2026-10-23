@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # Pre-0.4.2 behaviour. Set to false once your integration calls /sync/historical explicitly.
     # Will default to false in a future release.
     historical_sync_on_connect: bool = True
+    # Garmin-only hard kill switch for the historical backfill. Gates BOTH entry points:
+    # the grace-period auto-dispatch after OAuth connect and the explicit
+    # /sync/historical endpoint. Garmin's "Starter Access" program tier excludes
+    # historical data access entirely (HISTORICAL_DATA_EXPORT is Enterprise-only) and
+    # the developer terms forbid ad-hoc data requests — enable only with Enterprise Access.
+    garmin_backfill_enabled: bool = False
 
     # Whether to ingest per-second workout samples (speed, cadence, power, GPS, etc.) into
     # data_point_series on workout webhook arrival. Significantly increases DB storage.

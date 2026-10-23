@@ -146,7 +146,9 @@ def oauth_claim(
     # Controlled by HISTORICAL_SYNC_ON_CONNECT (default: true).
     if settings.historical_sync_on_connect:
         caps = strategy.capabilities
-        if caps.webhook_callback:
+        # webhook_callback is Garmin-only (the async backfill flow); its hard kill
+        # switch is separate because Starter Access forbids historical data access.
+        if caps.webhook_callback and settings.garmin_backfill_enabled:
             # this code is going to be removed later, so leave inner imports heres
             from app.integrations.celery.tasks import start_garmin_full_backfill
 

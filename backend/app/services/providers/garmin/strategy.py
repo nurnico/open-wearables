@@ -1,5 +1,8 @@
 from uuid import UUID
 
+from fastapi import HTTPException, status
+
+from app.config import settings
 from app.integrations.celery.tasks.garmin.backfill_task import start_full_backfill as start_garmin_full_backfill
 from app.services.providers.base_strategy import (
     BaseProviderStrategy,
@@ -87,6 +90,13 @@ class GarminStrategy(BaseProviderStrategy):
         The ``days`` parameter is ignored - Garmin limits historical access
         to 30 days before the user's consent date.
         """
+        if not settings.garmin_backfill_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Garmin historical backfill is disabled (GARMIN_BACKFILL_ENABLED=false). "
+                "Historical data access is not part of Garmin Starter Access; "
+                "enable only with Enterprise Access.",
+            )
         task = start_garmin_full_backfill.delay(str(user_id))
         return HistoricalSyncResult(
             task_id=task.id,

@@ -1,5 +1,12 @@
 """Tests for Garmin strategy."""
 
+from unittest.mock import patch
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+
+from app.config import settings
 from app.services.providers.garmin.oauth import GarminOAuth
 from app.services.providers.garmin.strategy import GarminStrategy
 from app.services.providers.garmin.workouts import GarminWorkouts
@@ -75,3 +82,22 @@ class TestGarminStrategy:
         assert strategy.user_repo is not None
         assert strategy.connection_repo is not None
         assert strategy.workout_repo is not None
+
+    def test_historical_sync_blocked_when_disabled(self) -> None:
+        """Default (Starter Access) must not trigger the Garmin backfill."""
+        strategy = GarminStrategy()
+        with patch.object(settings, "garmin_backfill_enabled", False):
+            with pytest.raises(HTTPException) as exc_info:
+                strategy.start_historical_sync(uuid4(), days=30)
+        assert exc_info.value.status_code == 403
+
+    def test_historical_sync_dispatches_when_enabled(self) -> None:
+        """GARMIN_BACKFILL_ENABLED=true (Enterprise Access) dispatches the backfill."""
+        strategy = GarminStrategy()
+        with (
+            patch.object(settings, "garmin_backfill_enabled", True),
+            patch("app.services.providers.garmin.strategy.start_garmin_full_backfill") as task,
+        ):
+            result = strategy.start_historical_sync(uuid4(), days=30)
+        task.delay.assert_called_once()
+        assert result.method == "webhook_backfill"
