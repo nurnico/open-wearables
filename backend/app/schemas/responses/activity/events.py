@@ -19,6 +19,7 @@ class Workout(BaseModel):
     end_time: datetime
     zone_offset: str | None = None
     duration_seconds: int | None = None
+    moving_time_seconds: int | None = None
     source: SourceMetadata
     calories_kcal: float | None = None
     distance_meters: float | None = None
