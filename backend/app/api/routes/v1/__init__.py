@@ -12,6 +12,7 @@ from .deprecated_webhooks import router as deprecated_webhooks_router
 from .developers import router as developers_router
 from .events import router as events_router
 from .health_scores import router as health_scores_router
+from .import_fit import router as import_fit_router
 from .import_xml import router as import_xml_router
 from .invitations import router as invitations_router
 from .meta import router as meta_router
@@ -49,6 +50,7 @@ v1_router.include_router(sync_data_router, prefix="/providers", tags=["External:
 v1_router.include_router(sync_status_router, tags=["External: Sync Status"])
 v1_router.include_router(vendor_workouts_router, prefix="/providers", tags=["System: Vendor Workouts"])
 v1_router.include_router(import_xml_router, tags=["External: Apple Health Import"])
+v1_router.include_router(import_fit_router, tags=["External: FIT Import"])
 v1_router.include_router(sdk_logs_router, tags=["External: Mobile SDK"])
 v1_router.include_router(sdk_sync_router, tags=["External: Mobile SDK"])
 v1_router.include_router(sdk_token_router, tags=["External: Mobile SDK"])

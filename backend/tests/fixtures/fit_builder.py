@@ -205,6 +205,68 @@ def make_running_fit(n_records: int = 20) -> bytes:
     return _fit_file(messages)
 
 
+# Session message (global_mesg_num=18) fields used here:
+#   253  timestamp          uint32  (FIT epoch seconds — end of session)
+#     2  start_time         uint32  (FIT epoch seconds)
+#     5  sport              enum    (1 = running)
+#     6  sub_sport          enum    (3 = trail)
+#     7  total_elapsed_time uint32  (raw = seconds * 1000)
+#     8  total_timer_time   uint32  (raw = seconds * 1000)
+#     9  total_distance     uint32  (raw = meters * 100)
+#    16  avg_heart_rate     uint8   (bpm)
+#    17  max_heart_rate     uint8   (bpm)
+#    22  total_ascent       uint16  (meters)
+_ENUM: int = 0x00
+
+_SESSION_FIELDS: list[_Field] = [
+    _Field(253, _UINT32, 4),
+    _Field(2, _UINT32, 4),
+    _Field(5, _ENUM, 1),
+    _Field(6, _ENUM, 1),
+    _Field(7, _UINT32, 4),
+    _Field(8, _UINT32, 4),
+    _Field(9, _UINT32, 4),
+    _Field(16, _UINT8, 1),
+    _Field(17, _UINT8, 1),
+    _Field(22, _UINT16, 2),
+]
+
+# File-id message (global_mesg_num=0): 1 manufacturer uint16 (1 = garmin)
+_FILE_ID_FIELDS: list[_Field] = [_Field(1, _UINT16, 2)]
+
+
+def make_session_fit(
+    start: datetime = datetime(2025, 6, 4, 6, 30, 0, tzinfo=timezone.utc),
+    elapsed_s: int = 1608,
+    timer_s: int = 1400,
+    distance_m: int = 4000,
+    sport: int = 1,
+    sub_sport: int = 0,
+) -> bytes:
+    """Synthetic activity with file_id + session summary (as exported from Garmin Connect)."""
+    start_ts = _fit_ts(start)
+    messages = _definition_msg(_FILE_ID_FIELDS, local_type=2, global_num=0)
+    messages += _data_msg(_FILE_ID_FIELDS, [1], local_type=2)
+    messages += _definition_msg(_SESSION_FIELDS, local_type=3, global_num=18)
+    messages += _data_msg(
+        _SESSION_FIELDS,
+        [
+            start_ts + elapsed_s,
+            start_ts,
+            sport,
+            sub_sport,
+            elapsed_s * 1000,
+            timer_s * 1000,
+            distance_m * 100,
+            173,
+            192,
+            51,
+        ],
+        local_type=3,
+    )
+    return _fit_file(messages)
+
+
 def make_cycling_fit(n_records: int = 10) -> bytes:
     """Synthetic indoor cycling: HR only (no ANT+ sensors connected)."""
     fields = [
