@@ -110,6 +110,19 @@ def get_workout_samples(
     return result
 
 
+@router.delete("/users/{user_id}/events/workouts")
+def delete_all_workouts(
+    user_id: UUID,
+    db: DbSession,
+    _api_key: ApiKeyDep,
+) -> dict[str, int]:
+    """Delete all workouts of a user (records, details and in-workout samples).
+
+    Provider connections stay active, so new workouts keep arriving.
+    """
+    return {"deleted": event_record_service.delete_all_workouts(db, user_id)}
+
+
 @router.delete("/users/{user_id}/events/workouts/{workout_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_workout(
     user_id: UUID,

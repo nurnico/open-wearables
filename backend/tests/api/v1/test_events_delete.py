@@ -9,17 +9,20 @@ and DELETE /api/v1/users/{user_id}/events/sleep/{id} endpoints including:
 - 404 for wrong category (e.g. deleting sleep via workouts endpoint)
 """
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models import EventRecord, SleepDetails, WorkoutDetails
+from app.models import DataPointSeries, EventRecord, SleepDetails, UserConnection, WorkoutDetails
 from tests.factories import (
     ApiKeyFactory,
+    DataPointSeriesFactory,
     DataSourceFactory,
     EventRecordFactory,
     SleepDetailsFactory,
+    UserConnectionFactory,
     UserFactory,
     WorkoutDetailsFactory,
 )
@@ -103,6 +106,68 @@ class TestDeleteWorkout:
 
         assert response.status_code == 404
         assert db.get(EventRecord, sleep.id) is not None
+
+
+class TestDeleteAllWorkouts:
+    """Test suite for DELETE /users/{user_id}/events/workouts."""
+
+    def test_deletes_workouts_and_in_workout_samples_only(self, client: TestClient, db: Session) -> None:
+        user = UserFactory()
+        ds = DataSourceFactory(user=user)
+        connection = UserConnectionFactory(user=user)
+        start = datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
+        workout = EventRecordFactory(mapping=ds, category="workout", type_="running", start_datetime=start)
+        detail = WorkoutDetailsFactory(event_record=workout)
+        detail_record_id = detail.record_id
+        other_ds = DataSourceFactory(user=user)
+        second = EventRecordFactory(mapping=other_ds, category="workout", type_="cycling")
+        sleep = EventRecordFactory(mapping=ds, category="sleep", type="sleep")
+        inside = DataPointSeriesFactory(data_source=ds, recorded_at=start + timedelta(minutes=10))
+        outside = DataPointSeriesFactory(data_source=ds, recorded_at=start - timedelta(hours=3))
+        ids = {
+            "workout": workout.id,
+            "second": second.id,
+            "sleep": sleep.id,
+            "inside": inside.id,
+            "outside": outside.id,
+            "connection": connection.id,
+        }
+        api_key = ApiKeyFactory()
+
+        response = client.delete(
+            f"/api/v1/users/{user.id}/events/workouts",
+            headers=api_key_headers(api_key.id),
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 2}
+        db.expire_all()
+        assert db.get(EventRecord, ids["workout"]) is None
+        assert db.get(EventRecord, ids["second"]) is None
+        assert db.get(WorkoutDetails, detail_record_id) is None
+        assert db.get(DataPointSeries, ids["inside"]) is None
+        assert db.get(DataPointSeries, ids["outside"]) is not None
+        assert db.get(EventRecord, ids["sleep"]) is not None
+        assert db.get(UserConnection, ids["connection"]) is not None
+
+    def test_leaves_other_users_untouched(self, client: TestClient, db: Session) -> None:
+        user = UserFactory()
+        other_user = UserFactory()
+        other_workout = EventRecordFactory(
+            mapping=DataSourceFactory(user=other_user), category="workout", type_="running"
+        )
+        other_workout_id = other_workout.id
+        api_key = ApiKeyFactory()
+
+        response = client.delete(
+            f"/api/v1/users/{user.id}/events/workouts",
+            headers=api_key_headers(api_key.id),
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 0}
+        db.expire_all()
+        assert db.get(EventRecord, other_workout_id) is not None
 
 
 class TestDeleteSleepSession:

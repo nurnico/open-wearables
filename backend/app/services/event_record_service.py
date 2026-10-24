@@ -1136,5 +1136,43 @@ class EventRecordService(
         self.crud.delete(db_session, record)
         return True
 
+    def delete_all_workouts(self, db_session: DbSession, user_id: UUID) -> int:
+        """Delete every workout of a user across all data sources.
+
+        Removes the granular samples recorded inside each workout window first
+        (they are keyed by data source and time, not by record), then the
+        workout records; ON DELETE CASCADE drops their details and linked
+        health scores. Connections stay untouched. Returns the number of
+        workout records deleted.
+        """
+        params = {"user_id": user_id}
+        db_session.execute(
+            sa_text(
+                "DELETE FROM data_point_series dps "
+                "USING event_record er, data_source ds "
+                "WHERE ds.user_id = :user_id "
+                "AND er.data_source_id = ds.id "
+                "AND er.category = 'workout' "
+                "AND dps.data_source_id = er.data_source_id "
+                "AND dps.is_daily_total IS NOT TRUE "
+                "AND dps.recorded_at >= er.start_datetime "
+                "AND dps.recorded_at < er.end_datetime"
+            ),
+            params,
+        )
+        deleted = db_session.execute(
+            sa_text(
+                "DELETE FROM event_record er "
+                "USING data_source ds "
+                "WHERE ds.user_id = :user_id "
+                "AND er.data_source_id = ds.id "
+                "AND er.category = 'workout'"
+            ),
+            params,
+        ).rowcount
+        db_session.commit()
+        self.logger.info("Deleted %s workouts for user %s", deleted, user_id)
+        return deleted
+
 
 event_record_service = EventRecordService(log=getLogger(__name__))
