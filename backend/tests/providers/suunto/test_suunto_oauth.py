@@ -15,8 +15,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import jwt
 import pytest
-from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.models import User

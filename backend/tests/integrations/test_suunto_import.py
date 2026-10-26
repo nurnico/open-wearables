@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import jwt
 import pytest
-from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.schemas.auth import ConnectionStatus

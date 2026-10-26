@@ -6,7 +6,7 @@ Tests cover:
 - DELETE /api/v1/token/refresh - revoke refresh token
 """
 
-from jose import jwt
+import jwt
 from sqlalchemy.orm import Session
 from starlette.testclient import TestClient
 

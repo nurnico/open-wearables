@@ -6,8 +6,8 @@ Tests JWT token creation, password hashing, and password verification.
 
 from datetime import datetime, timedelta, timezone
 
+import jwt
 import pytest
-from jose import JWTError, jwt
 
 from app.config import settings
 from app.utils.security import create_access_token, get_password_hash, verify_password
@@ -135,7 +135,7 @@ class TestCreateAccessToken:
         assert payload["sub"] == subject
 
         # Decoding with wrong algorithm should fail
-        with pytest.raises(JWTError):
+        with pytest.raises(jwt.PyJWTError):
             jwt.decode(token, settings.secret_key, algorithms=["HS512"])
 
 

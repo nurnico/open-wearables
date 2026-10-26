@@ -7,9 +7,9 @@ Tests JWT token extraction, developer authentication, and error handling.
 from datetime import timedelta
 from uuid import uuid4
 
+import jwt
 import pytest
 from fastapi import HTTPException
-from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings

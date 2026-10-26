@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from jose import jwt
+import jwt
 
 from app.config import settings
 from app.services.sdk_token_service import create_sdk_user_token

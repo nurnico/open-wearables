@@ -3,9 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import jwt
 import pytest
 from fastapi import HTTPException
-from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings

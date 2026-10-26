@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from jose import jwt
+import jwt
 from sqlalchemy.orm import Session
 from starlette.testclient import TestClient
 

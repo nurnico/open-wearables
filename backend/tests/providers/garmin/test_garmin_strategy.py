@@ -86,9 +86,8 @@ class TestGarminStrategy:
     def test_historical_sync_blocked_when_disabled(self) -> None:
         """Default (Starter Access) must not trigger the Garmin backfill."""
         strategy = GarminStrategy()
-        with patch.object(settings, "garmin_backfill_enabled", False):
-            with pytest.raises(HTTPException) as exc_info:
-                strategy.start_historical_sync(uuid4(), days=30)
+        with patch.object(settings, "garmin_backfill_enabled", False), pytest.raises(HTTPException) as exc_info:
+            strategy.start_historical_sync(uuid4(), days=30)
         assert exc_info.value.status_code == 403
 
     def test_historical_sync_dispatches_when_enabled(self) -> None:

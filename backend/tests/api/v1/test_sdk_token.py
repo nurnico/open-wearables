@@ -1,6 +1,6 @@
 """Tests for SDK token exchange endpoint."""
 
-from jose import jwt
+import jwt
 from sqlalchemy.orm import Session
 from starlette.testclient import TestClient
 

@@ -1,9 +1,9 @@
 from typing import Annotated
 from uuid import UUID
 
+import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 
 from app.config import settings
 from app.database import DbSession
@@ -46,7 +46,7 @@ async def get_current_developer(
         developer_id: str = payload.get("sub")
         if developer_id is None:
             raise credentials_exception
-    except JWTError:
+    except jwt.PyJWTError:
         raise credentials_exception
 
     developer = developer_repository.get(db, UUID(developer_id))
@@ -84,7 +84,7 @@ async def get_current_developer_optional(
         except ValueError:
             return None
 
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
     return developer_repository.get(db, developer_uuid)
@@ -125,7 +125,7 @@ async def get_sdk_auth(
                     user_id=UUID(sub) if sub else None,
                     app_id=payload.get("app_id"),
                 )
-        except JWTError:
+        except jwt.PyJWTError:
             pass  # Fall through to API key check
 
     # Fall back to API key (backwards compatibility)

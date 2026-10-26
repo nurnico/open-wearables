@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from jose import jwt
+import jwt
 from svix.api import (
     ApplicationIn,
     EndpointIn,
