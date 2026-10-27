@@ -1126,13 +1126,29 @@ class EventRecordService(
         record_id: UUID,
         category: str,
     ) -> bool:
-        """Delete an event record by id and category. Returns False if not found or not owned by user."""
+        """Delete an event record by id and category. Returns False if not found or not owned by user.
+
+        Workouts also lose the granular samples recorded inside their window
+        (keyed by data source and time, not by record), like in
+        :meth:`delete_all_workouts`.
+        """
         record = self.crud.get_record_with_details(db_session, record_id, category)
         if not record:
             return False
         data_source = self.data_source_repo.get(db_session, record.data_source_id)
         if not data_source or data_source.user_id != user_id:
             return False
+        if category == "workout":
+            end = record.end_datetime or record.start_datetime + timedelta(seconds=record.duration_seconds or 0)
+            db_session.execute(
+                sa_text(
+                    "DELETE FROM data_point_series "
+                    "WHERE data_source_id = :ds "
+                    "AND is_daily_total IS NOT TRUE "
+                    "AND recorded_at >= :s AND recorded_at <= :e"
+                ),
+                {"ds": record.data_source_id, "s": record.start_datetime, "e": end},
+            )
         self.crud.delete(db_session, record)
         return True
 
@@ -1156,7 +1172,7 @@ class EventRecordService(
                 "AND dps.data_source_id = er.data_source_id "
                 "AND dps.is_daily_total IS NOT TRUE "
                 "AND dps.recorded_at >= er.start_datetime "
-                "AND dps.recorded_at < er.end_datetime"
+                "AND dps.recorded_at <= er.end_datetime"
             ),
             params,
         )
