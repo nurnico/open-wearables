@@ -251,7 +251,13 @@ def import_fit_file(db: DbSession, user_id: UUID, data: bytes) -> FitImportResul
     )
 
     if settings.ingest_workout_samples and parsed.samples:
-        timeseries_service.bulk_create_samples(db, parsed.samples)
+        # Samples resolve their data source by (provider, device, source); they
+        # must match the record's, or the workout's sample query finds none
+        samples = [
+            s.model_copy(update={"provider": ProviderName.INTERNAL.value, "device_model": summary.device})
+            for s in parsed.samples
+        ]
+        timeseries_service.bulk_create_samples(db, samples)
         db.commit()
 
     return FitImportResult(status="imported", record_id=record.id, start=summary.start)
