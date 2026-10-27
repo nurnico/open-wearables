@@ -28,7 +28,7 @@ def import_fit(
     db: DbSession,
     _api_key: ApiKeyDep,
 ) -> FitImportResponse:
-    """Import one FIT activity file as a workout of the user (synchronous)."""
+    """Import one FIT or TCX activity file as a workout of the user (synchronous)."""
     if db.get(User, user_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     data = file.file.read(MAX_FIT_BYTES + 1)

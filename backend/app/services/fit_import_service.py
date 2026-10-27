@@ -1,9 +1,10 @@
-"""Import of user-uploaded FIT activity files (e.g. exported from Garmin Connect).
+"""Import of user-uploaded activity files: FIT (e.g. Garmin Connect, Strava
+originals) and TCX (e.g. Polar Flow, parsed by :mod:`app.services.tcx_parser`).
 
 Each file becomes one workout EventRecord under the INTERNAL provider with
 source ``fit_import``: summary values from the FIT ``session`` message, laps
-and HR/power zones from :func:`parse_fit_file`, per-second samples when
-``INGEST_WORKOUT_SAMPLES`` is enabled. A file whose start time lies within
+and HR/power zones from :func:`parse_fit_file` (TCX: laps and trackpoints),
+per-second samples when ``INGEST_WORKOUT_SAMPLES`` is enabled. A file whose start time lies within
 ``DUPLICATE_WINDOW`` of an existing workout of the same user is skipped, so
 re-uploads and activities that also arrive via a provider are not doubled.
 """
@@ -26,7 +27,8 @@ from app.schemas.enums import ProviderName
 from app.schemas.enums.workout_types import WorkoutType
 from app.schemas.model_crud.activities import EventRecordCreate, EventRecordDetailCreate
 from app.services.event_record_service import event_record_service
-from app.services.fit_parser import parse_fit_file
+from app.services.fit_parser import FitParseResult, parse_fit_file
+from app.services.tcx_parser import is_tcx, parse_tcx
 from app.services.timeseries_service import timeseries_service
 
 logger = logging.getLogger(__name__)
@@ -197,11 +199,18 @@ def _has_workout_near(db: DbSession, user_id: UUID, start: datetime) -> bool:
 
 
 def import_fit_file(db: DbSession, user_id: UUID, data: bytes) -> FitImportResult:
-    """Parse one FIT file and store it as a workout of ``user_id``."""
+    """Parse one activity file (FIT or TCX) and store it as a workout of ``user_id``."""
+    tcx = is_tcx(data)
+    parsed: FitParseResult | None = None
     try:
-        summary = parse_fit_summary(data)
-    except Exception as exc:  # fitdecode raises various errors on broken files
-        logger.info("FIT import: unreadable file for user %s: %s", user_id, exc)
+        if tcx:
+            parsed_tcx = parse_tcx(data, user_id, FIT_IMPORT_SOURCE)
+            summary = parsed_tcx[0] if parsed_tcx else None
+            parsed = parsed_tcx[1] if parsed_tcx else None
+        else:
+            summary = parse_fit_summary(data)
+    except Exception as exc:  # fitdecode / XML parsing raise various errors on broken files
+        logger.info("Activity import: unreadable file for user %s: %s", user_id, exc)
         return FitImportResult(status="invalid", reason="unreadable")
     if summary is None:
         return FitImportResult(status="invalid", reason="no_session")
@@ -228,7 +237,8 @@ def import_fit_file(db: DbSession, user_id: UUID, data: bytes) -> FitImportResul
         ),
     )
 
-    parsed = parse_fit_file(data, user_id, record.data_source_id, source=FIT_IMPORT_SOURCE)
+    if parsed is None:
+        parsed = parse_fit_file(data, user_id, record.data_source_id, source=FIT_IMPORT_SOURCE)
     event_record_service.create_detail(
         db,
         EventRecordDetailCreate(
