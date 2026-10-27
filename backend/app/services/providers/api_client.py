@@ -132,7 +132,8 @@ def make_authenticated_request(
             HTTP/2, e.g. Sensor Bio.  Other providers are unaffected.
 
     Returns:
-        Any: API response JSON, or dict with status_code if expect_json=False
+        Any: API response JSON, None for 204 No Content or an empty body,
+            or dict with status_code if expect_json=False
 
     Raises:
         HTTPException: If API request fails
@@ -200,6 +201,10 @@ def make_authenticated_request(
                     "status_code": response.status_code,
                     "accepted": response.status_code == 202,
                 }
+
+            # 204 No Content / empty body = no data for this request
+            if response.status_code == 204 or not response.content:
+                return None
 
             result = response.json()
 

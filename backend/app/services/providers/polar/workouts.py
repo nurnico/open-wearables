@@ -167,7 +167,7 @@ class PolarWorkouts(BaseWorkoutsTemplate):
     ) -> int:
         """Load data from Polar API."""
         workouts_data = self.get_workouts_from_api(db, user_id, **kwargs)
-        workouts = [PolarExerciseJSON(**w) for w in workouts_data]
+        workouts = [PolarExerciseJSON(**w) for w in workouts_data or []]
 
         # Polar's list endpoint ignores the sync window and returns the full
         # exercise history; the per-exercise route fetch below must not follow
